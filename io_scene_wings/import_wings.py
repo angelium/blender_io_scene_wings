@@ -1,11 +1,14 @@
-import bpy
+## updated by the Angelium team for blender2.79
+
+import bpy, bmesh
 import struct,time,sys,os,zlib,io,mathutils
-from mathutils.geometry import tesselate_polygon,normal
-from io_utils import load_image, unpack_list, unpack_face_list
+import mathutils.geometry # import tesselate_polygon,normal
+from bpy_extras.io_utils import unpack_list, unpack_face_list
+from bpy_extras.image_utils import load_image
 from math import radians,sin,cos
 import os.path
 
-def BPyMesh_ngon(from_data, indices, PREF_FIX_LOOPS=True):
+def BPyMesh_ngon(from_data, indices, PREF_FIX_LOOPS=False):
     '''
     Takes a polyline of indices (fgon)
     and returns a list of face indicie lists.
@@ -158,7 +161,7 @@ def BPyMesh_ngon(from_data, indices, PREF_FIX_LOOPS=True):
                     vert_map[i + ii] = vert[2]
                 ii += len(verts)
 
-        fill = tesselate_polygon([[v[0] for v in loop] for loop in loop_list])
+        fill = mathutils.geometry.tesselate_polygon([[v[0] for v in loop] for loop in loop_list])
         #draw_loops(loop_list)
         #raise 'done loop'
         # map to original indices
@@ -354,8 +357,11 @@ def read_array_as_dict(data,fn=read_key,strip=1):
   size, = struct.unpack(">L",data.read(4))
   #print("keys: ",size)
   for i in range(size):
-    k,d = fn(data)
-    out[k] = d
+    try:
+      k,d = fn(data)
+      out[k] = d
+    except struct.error as err:  ## TODO fix loading material settings
+      print(err)
   data.read(1)
   return out
 
@@ -598,14 +604,31 @@ def read_shape(data,use_subsurf,use_hidden):
   me = bpy.data.meshes.new(shape_name)
   ob = bpy.data.objects.new(shape_name,me)
   bpy.context.scene.objects.link(ob)
-  me.vertices.add(len(verts))
-  me.vertices.foreach_set("co", unpack_list(verts))
-  me.faces.add(len(faces))
-  me.faces.foreach_set("vertices_raw",unpack_face_list(faces))
-  me.edges.add(len(edges))
-  me.edges.foreach_set("vertices",unpack_list(edges))
-  me.validate()
- # me.update(calc_edges=True)
+
+  ## old style before bmesh
+  if False:
+    me.vertices.add(len(verts))
+    me.vertices.foreach_set("co", unpack_list(verts))
+    #me.faces.add(len(faces))
+    #me.faces.foreach_set("vertices_raw",unpack_face_list(faces))
+    me.edges.add(len(edges))
+    me.edges.foreach_set("vertices",unpack_list(edges))
+    #me.polygons.add(len(faces))  ## crashes blender2.79
+    #me.polygons.foreach_set("vertices",unpack_face_list(faces))
+    me.validate()
+    me.update(calc_edges=True)
+
+    bpy.context.scene.objects.active = ob
+    bpy.ops.object.mode_set(mode='EDIT') 
+    bm = bmesh.from_edit_mesh(ob.data)
+    #for vec in unpack_list(verts):
+    #  bm.verts.new(vec)
+    for poly in faces:
+      bm.faces.ensure_lookup_table()
+      bm.faces.new( [bm.verts[i] for i in poly] )
+
+  else:
+    me.from_pydata( verts, edges, faces)
 
   #add edges to blender mesh, mark special edges
   #b_edges = me.edges
@@ -614,11 +637,11 @@ def read_shape(data,use_subsurf,use_hidden):
     #print("edge ", i, " ",v0,"-",v1)
 
   build_hard_edges(me,hard_edges)
-  hide_fgon_edges(me,hide_edges)
+  #hide_fgon_edges(me,hide_edges)
 
   if len(face_cols) > 0: build_face_colors(me,face_cols)
   if len(face_uvs) > 0: build_face_uvs(me,face_uvs)
-  for i in range(len(faces)): me.faces[i].use_smooth = True
+  for i in range(len(faces)): me.polygons[i].use_smooth = True
   add_material_indices(me,face_props)
 
   mods = ob.modifiers
@@ -698,10 +721,10 @@ def build_mirror_pivot(f,verts,ob):
   v2 = mathutils.Vector(verts[f[2]])
   if len(f) == 4:
     v3 = mathutils.Vector(verts[f[3]])
-    norm = normal(v0,v1,v2,v3)
+    norm = mathutils.geometry.normal(v0,v1,v2,v3)
   else:
     v3 = None
-    norm = normal(v0,v1,v2)
+    norm = mathutils.geometry.normal(v0,v1,v2)
   rot = norm.to_track_quat('X','Z')
   r = rot.to_euler('XYZ')
   p0 = v0.lerp(v1,0.5)
@@ -722,7 +745,7 @@ def get_face_material(facemat):
 
 def add_material_indices(me,face_props):
   mats = {}
-  bfaces = me.faces
+  bfaces = me.polygons
   for i in range (len(bfaces)):
     blender_face = bfaces[i]
     face_mat = get_face_material(face_props[i])
@@ -913,19 +936,23 @@ def read_material(data):
   m_attribs = mats[b'opengl']
   if b'diffuse' in m_attribs :
     (r,g,b,a) = m_attribs[b'diffuse']
-    material.diffuse_color = (r,g,b)
+    if r is not None:
+      material.diffuse_color = (r,g,b)
   if b'specular' in m_attribs :
     (r,g,b,a) = m_attribs[b'specular']
-    material.specular_color = (r,g,b)
+    if r is not None:
+      material.specular_color = (r,g,b)
   if b'ambient' in m_attribs :
     (r,g,b,a) = m_attribs[b'ambient']
-    material.ambient = (r+g+b+a)/4.0
+    if r is not None:
+      material.ambient = (r+g+b+a)/4.0
   if b'emission' in m_attribs :
     (r,g,b,a) = m_attribs[b'emission']
     material.emit = (r+g+b+a)/4.0
   if b'shininess' in m_attribs :
     s = m_attribs[b'shininess']
-    material.specular_hardness = int(s*511)
+    if s is not None:
+      material.specular_hardness = int(s*511)
   return (mat_name,mats[b'maps'])
 
 def add_textures(images,mappings,current_filepath):
@@ -1017,16 +1044,21 @@ def read_wings_header(data):
   read_tuple_header(data)
   return version
 
-def load(operator, context, filepath="",use_lamps=True,use_cameras=False,use_subsurfs=True,use_hidden=True):
+def load(operator, context, filepath="",use_lamps=True,use_cameras=False,use_subsurfs=True,use_hidden=True, use_props=False):
   data = load_wings_file(filepath)
   version = read_wings_header(data)
   print ("version",version)
   read_shapes(data,use_subsurfs,use_hidden)
   matmaps = read_array_as_dict(data,read_material)
   print ("matmaps: ",matmaps)
-  props = read_array_as_dict(data,read_prop)
-  #print ("Props: ",props)
-  if use_lamps == True and b'lights' in props:
-    build_lamps(props[b'lights'])
-  if b'images' in props: add_textures(props[b'images'],matmaps,filepath)
-  return {'FINISHED'}
+  if use_props:  ## TODO
+    props = read_array_as_dict(data,read_prop)
+    #print ("Props: ",props)
+    if use_lamps == True and b'lights' in props:
+      build_lamps(props[b'lights'])
+    if b'images' in props: add_textures(props[b'images'],matmaps,filepath)
+    return {'FINISHED'}
+
+if __name__ == "__main__":
+  import os
+  load(None, None, filepath=os.path.expanduser("~/knot.wings"), use_lamps=False, use_cameras=False)
