@@ -693,15 +693,20 @@ def hide_fgon_edges(me,hide_edges):
 
 def build_face_colors(me,face_cols):
   blender_me_vcols = me.vertex_colors.new()
+  print(len(face_cols), ' vs ', len(blender_me_vcols.data))
   for i in range(len(face_cols)):
     source_vcol = face_cols[i]
     if len(source_vcol) == 0: continue
-    blender_vcol_face = blender_me_vcols.data[i]
-    blender_vcol_face.color1 = source_vcol[0]
-    blender_vcol_face.color2 = source_vcol[1]
-    blender_vcol_face.color3 = source_vcol[2]
-    if len(source_vcol) > 3:
-      blender_vcol_face.color4 = source_vcol[3]
+    for j in range(3):  ## TODO this is still not correct
+      blender_vcol_face = blender_me_vcols.data[i+j]
+      blender_vcol_face.color = source_vcol[j]
+
+    ## old blender pre-bmesh API ##
+    #blender_vcol_face.color1 = source_vcol[0]
+    #blender_vcol_face.color2 = source_vcol[1]
+    #blender_vcol_face.color3 = source_vcol[2]
+    #if len(source_vcol) > 3:
+    #  blender_vcol_face.color4 = source_vcol[3]
 
 def build_face_uvs(me,face_uvs):
   blender_me_uvs = me.uv_textures.new()
@@ -754,7 +759,9 @@ def add_material_indices(me,face_props):
     else:
       mat_name = str(face_mat,encoding="utf8")
       mat = bpy.data.materials.get(mat_name)
-      if mat == None: mat = bpy.data.materials.new(mat_name)
+      if mat == None:
+        mat = bpy.data.materials.new(mat_name)
+        mat.use_vertex_color_paint = True
       me.materials.append(mat)
       index = len(mats)
       mats[face_mat]=index
@@ -1061,4 +1068,4 @@ def load(operator, context, filepath="",use_lamps=True,use_cameras=False,use_sub
 
 if __name__ == "__main__":
   import os
-  load(None, None, filepath=os.path.expanduser("~/knot.wings"), use_lamps=False, use_cameras=False)
+  load(None, None, filepath=os.path.expanduser("~/knot-vcolors.wings"), use_lamps=False, use_cameras=False)
